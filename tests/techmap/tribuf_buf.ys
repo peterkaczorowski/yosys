@@ -1,0 +1,55 @@
+# tribuf -logic keeps tri-state buffers that reach an output port only
+# through $buf cells, as read_slang connects flattened ports that way.
+read_rtlil <<EOT
+module \tribuf_buf
+  wire input 1 \e
+  wire input 2 \a
+  wire output 3 \o
+  wire \y1
+  wire \y2
+  cell $tribuf \t
+    parameter \WIDTH 1
+    connect \A \a
+    connect \EN \e
+    connect \Y \y1
+  end
+  cell $buf \b1
+    parameter \WIDTH 1
+    connect \A \y1
+    connect \Y \y2
+  end
+  cell $buf \b2
+    parameter \WIDTH 1
+    connect \A \y2
+    connect \Y \o
+  end
+end
+EOT
+tribuf -logic
+select -assert-count 1 t:$tribuf
+
+# A buffer not reaching a port is still converted to logic
+design -reset
+read_rtlil <<EOT
+module \tribuf_internal
+  wire input 1 \e
+  wire input 2 \a
+  wire output 3 \o
+  wire \y1
+  cell $tribuf \t
+    parameter \WIDTH 1
+    connect \A \a
+    connect \EN \e
+    connect \Y \y1
+  end
+  cell $not \n
+    parameter \A_WIDTH 1
+    parameter \A_SIGNED 0
+    parameter \Y_WIDTH 1
+    connect \A \y1
+    connect \Y \o
+  end
+end
+EOT
+tribuf -logic
+select -assert-none t:$tribuf

@@ -57,11 +57,36 @@ struct TribufWorker {
 		dict<SigSpec, vector<Cell*>> tribuf_cells;
 		pool<SigBit> output_bits;
 
-		if (config.logic_mode || config.formal_mode)
+		if (config.logic_mode || config.formal_mode) {
 			for (auto wire : module->wires())
 				if (wire->port_output)
 					for (auto bit : sigmap(wire))
 						output_bits.insert(bit);
+
+			// A tri-state buffer may reach the output port through buffer
+			// cells (frontends such as read_slang connect flattened ports
+			// with $buf), so walk buffer chains backwards from the ports.
+			dict<SigBit, vector<SigBit>> buf_inputs;
+			for (auto cell : module->cells())
+				if (cell->type.in(ID($buf), ID($_BUF_))) {
+					SigSpec a = sigmap(cell->getPort(ID::A));
+					SigSpec y = sigmap(cell->getPort(ID::Y));
+					for (int i = 0; i < GetSize(y) && i < GetSize(a); i++)
+						buf_inputs[y[i]].push_back(a[i]);
+				}
+
+			vector<SigBit> queue(output_bits.begin(), output_bits.end());
+			while (!queue.empty()) {
+				SigBit bit = queue.back();
+				queue.pop_back();
+				auto it = buf_inputs.find(bit);
+				if (it == buf_inputs.end())
+					continue;
+				for (auto input : it->second)
+					if (input.wire && output_bits.insert(input).second)
+						queue.push_back(input);
+			}
+		}
 
 		for (auto cell : module->selected_cells())
 		{
