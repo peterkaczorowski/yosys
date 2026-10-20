@@ -248,17 +248,40 @@ struct IopadmapPass : public Pass {
 				pool<SigBit> driven_bits;
 				dict<SigBit, std::pair<SigSig, int>> z_conns;
 
+				// Tristate buffers by the canonical bit they drive, for ports
+				// that only alias the buffer output through a connection (as
+				// left by opt_clean when it keeps a public cell-driven name).
+				// A nullptr marks a net with more than one buffer.
+				SigMap sigmap(module);
+				dict<SigBit, Cell *> tbuf_mapped_bits;
+				pool<Cell *> tbuf_consumed;
+
 				// Gather tristate buffers and always-on drivers.
 				for (auto cell : module->cells())
 					if (cell->type == ID($_TBUF_)) {
 						SigBit bit = cell->getPort(ID::Y).as_bit();
 						tbuf_bits[bit] = cell;
+						SigBit mapped = sigmap(bit);
+						if (tbuf_mapped_bits.count(mapped))
+							tbuf_mapped_bits[mapped] = nullptr;
+						else
+							tbuf_mapped_bits[mapped] = cell;
 					} else {
 						for (auto port : cell->connections())
 							if (!cell->known() || cell->output(port.first))
 								for (auto bit : port.second)
 									driven_bits.insert(bit);
 					}
+
+				// A buffer directly driving an output port bit belongs to that
+				// port; only the others may be found through an alias.
+				for (auto wire : module->selected_wires())
+					if (wire->port_output)
+						for (int i = 0; i < GetSize(wire); i++) {
+							auto it = tbuf_bits.find(SigBit(wire, i));
+							if (it != tbuf_bits.end())
+								tbuf_mapped_bits.erase(sigmap(it->first));
+						}
 
 				// If a wire is a target of an assignment, it is driven, unless the source is 'z.
 				for (auto &conn : module->connections())
@@ -293,17 +316,27 @@ struct IopadmapPass : public Pass {
 						if (buf_ports.count(make_pair(module->name, make_pair(wire->name, i))))
 							continue;
 
-						if (tbuf_bits.count(wire_bit))
+						if (tbuf_bits.count(wire_bit)) {
 							tbuf_cell = tbuf_bits.at(wire_bit);
+						} else {
+							auto it = tbuf_mapped_bits.find(sigmap(wire_bit));
+							if (it != tbuf_mapped_bits.end())
+								tbuf_cell = it->second;
+						}
+						if (tbuf_cell != nullptr && tbuf_consumed.count(tbuf_cell))
+							tbuf_cell = nullptr;
 
 						SigBit en_sig;
 						SigBit data_sig;
+						SigBit tbuf_y;
 						bool is_driven = driven_bits.count(wire_bit);
 
 						if (tbuf_cell != nullptr) {
 							// Found a tristate buffer — use it.
 							en_sig = tbuf_cell->getPort(ID::E).as_bit();
 							data_sig = tbuf_cell->getPort(ID::A).as_bit();
+							tbuf_y = tbuf_cell->getPort(ID::Y).as_bit();
+							tbuf_consumed.insert(tbuf_cell);
 						} else if (is_driven) {
 							// No tristate buffer, but an always-on driver is present.
 							// If this is an inout port, we're creating a tinoutpad
@@ -362,7 +395,8 @@ struct IopadmapPass : public Pass {
 
 							if (tbuf_cell) {
 								module->remove(tbuf_cell);
-								module->connect(wire_bit, data_sig);
+								// Keep the buffer output (and the port aliasing it) driven for internal users
+								module->connect(tbuf_y, data_sig);
 							}
 							if (!toutpad_portname_pad.empty())
 								rewrite_bits[wire][i] = make_pair(cell, module->twines().add(RTLIL::escape_id(toutpad_portname_pad)));

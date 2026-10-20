@@ -184,3 +184,41 @@ select -assert-count 1 b/c:s* %co %a b/a:init=2'b1x %i
 select -assert-count 1 b/a:init
 select -assert-count 1 c/t:iobuf %co c/a:init=1'b0 %i
 select -assert-count 1 c/a:init
+
+# A tristate buffer driving the output port through an alias (as left by
+# opt_clean when it keeps a public cell-driven wire name) is still merged
+# into the pad, and internal users of the buffer output keep the data.
+design -reset
+read_rtlil <<EOT
+module \alias_tbuf
+  wire input 1 \e
+  wire input 2 \a
+  wire output 3 \o
+  wire output 4 \r
+  wire \internal
+  cell $_TBUF_ \t
+    connect \A \a
+    connect \E \e
+    connect \Y \internal
+  end
+  cell $_NOT_ \n
+    connect \A \internal
+    connect \Y \r
+  end
+  connect \o \internal
+end
+EOT
+read_verilog -lib <<EOT
+module ibuf ((* iopad_external_pin *) input i, output o); endmodule
+module obuf (input i, (* iopad_external_pin *) output o); endmodule
+module obuft (input i, input oe, (* iopad_external_pin *) output o); endmodule
+EOT
+iopadmap -bits -inpad ibuf o:i -outpad obuf i:o -toutpad obuft oe:i:o alias_tbuf
+select -assert-none alias_tbuf/t:$_TBUF_
+select -assert-count 1 alias_tbuf/t:obuft
+select -assert-count 1 alias_tbuf/t:obuf
+select -assert-count 1 alias_tbuf/w:o %ci1:+[o] alias_tbuf/t:obuft %i
+select -assert-count 1 alias_tbuf/t:obuft %ci1:+[oe] %ci1:+[o] alias_tbuf/t:ibuf %i
+select -assert-count 1 alias_tbuf/t:obuft %ci1:+[i] %ci1:+[o] alias_tbuf/t:ibuf %i
+opt_clean
+select -assert-count 1 alias_tbuf/t:$_NOT_ %ci1:+[A] %ci1:+[o] alias_tbuf/t:ibuf %i
