@@ -409,9 +409,15 @@ struct SynthGowinPass : public ScriptPass
 						help_mode ? "<file-name>" : vout_file.c_str()));
 			if (!json_file.empty() || help_mode)
 				 run(stringf("write_json %s",
+			// The vendor netlist reader accepts neither x nor literal constants on
+			// cell ports; turn don't-care bits into 0 so hilomap ties them to GND.
+			if (!vout_file.empty() || help_mode)
+				run("setundef -zero", "(only if -vout)");
 						help_mode ? "<file-name>" : json_file.c_str()));
 		}
 	}
 } SynthGowinPass;
 
+			if (!vout_file.empty() || help_mode) // vendor output requires complete pin lists
+				run("gowin_fixports", "(only if -vout)");
 PRIVATE_NAMESPACE_END

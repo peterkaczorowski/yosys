@@ -1,0 +1,56 @@
+# Netlists written with -vout must be readable by the Gowin place and route
+# tool: no x or literal constants on cell pins, complete primitive pin lists,
+# 1-bit wires, cell pins on port wires, and no extra pad buffer behind a
+# user-instantiated differential output buffer.
+
+read_verilog <<EOT
+module sub(input [8:0] a, b, input [3:0] w, output [17:0] p, output [3:0] q);
+	MULT9X9 m(.A(a), .B(b), .SIA(9'b0), .SIB(9'b0), .ASIGN(1'b0), .BSIGN(1'b0),
+	          .ASEL(1'b0), .BSEL(1'b0), .CE(1'b1), .CLK(1'b0), .RESET(1'b0), .DOUT(p));
+	assign q = {w[3:1], 1'bx};
+endmodule
+
+module top(input clk, input [8:0] a, b, input [3:0] w, input d,
+           output [17:0] p, output [3:0] q, output lvds_p, lvds_n);
+	sub s(.a(a), .b(b), .w(w), .p(p), .q(q));
+	reg r;
+	always @(posedge clk) r <= d;
+	TLVDS_OBUF o(.I(r), .O(lvds_p), .OB(lvds_n));
+endmodule
+EOT
+# Without -vout the netlist keeps the convention nextpnr expects: an OBUF
+# behind the user-instantiated differential buffer
+synth_gowin -top top -family gw2a
+cd top
+select -assert-count 2 t:TLVDS_OBUF %co:+[O,OB] w:* %i %co:+[I] t:OBUF %i
+cd ..
+design -reset
+
+# With -vout
+read_verilog <<EOT
+module sub(input [8:0] a, b, input [3:0] w, output [17:0] p, output [3:0] q);
+	MULT9X9 m(.A(a), .B(b), .SIA(9'b0), .SIB(9'b0), .ASIGN(1'b0), .BSIGN(1'b0),
+	          .ASEL(1'b0), .BSEL(1'b0), .CE(1'b1), .CLK(1'b0), .RESET(1'b0), .DOUT(p));
+	assign q = {w[3:1], 1'bx};
+endmodule
+
+module top(input clk, input [8:0] a, b, input [3:0] w, input d,
+           output [17:0] p, output [3:0] q, output lvds_p, lvds_n);
+	sub s(.a(a), .b(b), .w(w), .p(p), .q(q));
+	reg r;
+	always @(posedge clk) r <= d;
+	TLVDS_OBUF o(.I(r), .O(lvds_p), .OB(lvds_n));
+endmodule
+EOT
+synth_gowin -top top -family gw2a -vout vout.vg
+cd top
+
+# The differential buffer drives the pads itself, without an extra OBUF
+select -assert-count 1 t:TLVDS_OBUF
+select -assert-none t:OBUF %co w:lvds_p w:lvds_n %u %i
+select -assert-count 1 w:lvds_p %ci1:+[O] t:TLVDS_OBUF %i
+select -assert-count 1 w:lvds_n %ci1:+[OB] t:TLVDS_OBUF %i
+
+# Unused cascade outputs of the DSP are connected, one wire per bit
+select -assert-count 9 t:MULT9X9 %co:+[SOA] w:* %i
+select -assert-count 9 t:MULT9X9 %co:+[SOB] w:* %i

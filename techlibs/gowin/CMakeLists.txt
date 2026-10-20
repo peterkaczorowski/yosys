@@ -1,3 +1,7 @@
+yosys_pass(gowin_fixports
+	gowin_fixports.cc
+)
+
 yosys_pass(synth_gowin
 	synth_gowin.cc
 	REQUIRES
@@ -11,6 +15,7 @@ yosys_pass(synth_gowin
 		deminout
 		dfflegalize
 		flatten
+		gowin_fixports
 		fsm
 		hierarchy
 		hilomap
