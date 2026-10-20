@@ -114,6 +114,13 @@ struct SynthGowinPass : public ScriptPass
 		log("    -noalu\n");
 		log("        do not use ALU cells\n");
 		log("\n");
+		log("    -cmp2lut\n");
+		log("        map comparisons against constants to LUTs instead of ALU chains\n");
+		log("\n");
+		log("    -cmp2lcu\n");
+		log("        decompose wide comparisons into LUT-sized chunks joined by a carry\n");
+		log("        lookahead unit (implies -cmp2lut)\n");
+		log("\n");
 		log("    -no-rw-check\n");
 		log("        marks all recognized read ports as \"return don't-care value on\n");
 		log("        read/write collision\" (same result as setting the no_rw_check\n");
@@ -136,7 +143,7 @@ struct SynthGowinPass : public ScriptPass
 	}
 
 	string top_opt, vout_file, json_file, family;
-	bool nobram, nolutram, flatten, nodffe, strict_gw5a_dffs, nowidelut, noiopads, noalu, no_rw_check, setundef, nodsp;
+	bool nobram, nolutram, flatten, nodffe, strict_gw5a_dffs, nowidelut, noiopads, noalu, cmp2lut, cmp2lcu, no_rw_check, setundef, nodsp;
 
 	void clear_flags() override
 	{
@@ -152,6 +159,8 @@ struct SynthGowinPass : public ScriptPass
 		nowidelut = false;
 		noiopads = false;
 		noalu = false;
+		cmp2lut = false;
+		cmp2lcu = false;
 		no_rw_check = false;
 		setundef = false;
 		nodsp = false;
@@ -219,6 +228,15 @@ struct SynthGowinPass : public ScriptPass
 			}
 			if (args[argidx] == "-noalu") {
 				noalu = true;
+				continue;
+			}
+			if (args[argidx] == "-cmp2lut") {
+				cmp2lut = true;
+				continue;
+			}
+			if (args[argidx] == "-cmp2lcu") {
+				cmp2lut = true;
+				cmp2lcu = true;
 				continue;
 			}
 			if (args[argidx] == "-abc9") {
@@ -307,6 +325,10 @@ struct SynthGowinPass : public ScriptPass
 				run("techmap -map +/gowin/dsp_map.v");
 			}
 
+			if (help_mode)
+				run("techmap -map +/cmp2lut.v [-map +/cmp2lcu.v] -D LUT_WIDTH=4", "(only if -cmp2lut or -cmp2lcu)");
+			else if (cmp2lut)
+				run(stringf("techmap -map +/cmp2lut.v%s -D LUT_WIDTH=4", cmp2lcu ? " -map +/cmp2lcu.v" : ""));
 			run("alumacc");
 			run("opt");
 			run("memory -nomap" + no_rw_check_opt);
@@ -387,11 +409,17 @@ struct SynthGowinPass : public ScriptPass
 			run("opt_lut_ins -tech gowin");
 			if (setundef || help_mode)
 				run("setundef -undriven -params -zero", "(only if -setundef)");
+			// The vendor netlist reader accepts neither x nor literal constants on
+			// cell ports; turn don't-care bits into 0 so hilomap ties them to GND.
+			if (!vout_file.empty() || help_mode)
+				run("setundef -zero", "(only if -vout)");
 			run("hilomap -singleton -hicell VCC V -locell GND G");
 			if (!vout_file.empty() || help_mode) // vendor output requires 1-bit wires
 				run("splitnets -ports", "(only if -vout)");
 			run("clean");
 			run("autoname");
+			if (!vout_file.empty() || help_mode) // vendor output requires complete pin lists
+				run("gowin_fixports", "(only if -vout)");
 		}
 
 		if (check_label("check"))
@@ -409,15 +437,9 @@ struct SynthGowinPass : public ScriptPass
 						help_mode ? "<file-name>" : vout_file.c_str()));
 			if (!json_file.empty() || help_mode)
 				 run(stringf("write_json %s",
-			// The vendor netlist reader accepts neither x nor literal constants on
-			// cell ports; turn don't-care bits into 0 so hilomap ties them to GND.
-			if (!vout_file.empty() || help_mode)
-				run("setundef -zero", "(only if -vout)");
 						help_mode ? "<file-name>" : json_file.c_str()));
 		}
 	}
 } SynthGowinPass;
 
-			if (!vout_file.empty() || help_mode) // vendor output requires complete pin lists
-				run("gowin_fixports", "(only if -vout)");
 PRIVATE_NAMESPACE_END
